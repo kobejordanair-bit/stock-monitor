@@ -130,7 +130,11 @@ def parse_symbol(raw: str) -> tuple[str, str]:
 @st.cache_data(ttl=300)
 def fetch_data(symbol: str, period: str):
     try:
-        df = yf.download(symbol, period=period, auto_adjust=True, progress=False)
+        import yfinance as yf2
+        yf2.utils.get_user_agent_headers = lambda: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        }
+        df = yf2.download(symbol, period=period, auto_adjust=True, progress=False)
         if df.empty:
             return None
         if isinstance(df.columns, pd.MultiIndex):
