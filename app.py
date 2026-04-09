@@ -8,6 +8,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -114,17 +115,12 @@ def parse_symbol(raw: str) -> tuple[str, str]:
 @st.cache_data(ttl=300)
 def fetch_data(symbol: str, period: str) -> pd.DataFrame | None:
     try:
-        session = requests.Session()
-        session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        ticker = yf.Ticker(symbol, session=session)
-        df = ticker.history(period=period)
-        if df.empty:
-            # 重試一次，有時候第一次會失敗
-            import time
-            time.sleep(2)
-            df = ticker.history(period=period)
+        df = yf.download(symbol, period=period, auto_adjust=True, progress=False)
         if df.empty:
             return None
+        # yf.download 欄位有時是 MultiIndex，壓平處理
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
         df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
         df.index = pd.to_datetime(df.index.date)
         return df
