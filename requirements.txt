@@ -3,5 +3,4 @@ yfinance
 pandas
 numpy
 plotly
-supabase
 websockets>=13.0
