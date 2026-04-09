@@ -114,7 +114,10 @@ def parse_symbol(raw: str) -> tuple[str, str]:
 @st.cache_data(ttl=300)
 def fetch_data(symbol: str, period: str) -> pd.DataFrame | None:
     try:
-        ticker = yf.Ticker(symbol)
+        yf.utils.get_json = lambda url, proxy=None, session=None: {}
+        session = requests.Session()
+        session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ticker = yf.Ticker(symbol, session=session)
         df = ticker.history(period=period)
         if df.empty:
             # 重試一次，有時候第一次會失敗
