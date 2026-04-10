@@ -128,17 +128,47 @@ def parse_symbol(raw: str) -> tuple[str, str]:
     return raw, "美股"
 
 @st.cache_data(ttl=300)
+@st.cache_data(ttl=300)
 def fetch_data(symbol: str, period: str):
     try:
-        df = yf.download(symbol, period=period, auto_adjust=True, progress=False)
-        if df.empty:
-            import time
-            time.sleep(3)
+        # 台股用 twstock
+        if symbol.endswith(".TW"):
+            import twstock
+            code = symbol.replace(".TW", "")
+            stock = twstock.Stock(code)
+            # 依 period 決定抓幾個月
+            months = {"1mo": 1, "3mo": 3, "6mo": 6, "1y": 12}.get(period, 6)
+            from datetime import date
+            today = date.today()
+            year = today.year
+            month = today.month - months
+            if month <= 0:
+                year -= 1
+                month += 12
+            stock.fetch_from(year, month)
+            if not stock.date:
+                return None
+            df = pd.DataFrame({
+                "Open": stock.open,
+                "High": stock.high,
+                "Low": stock.low,
+                "Close": stock.price,
+                "Volume": stock.capacity,
+            }, index=pd.to_datetime(stock.date))
+            df.index = pd.to_datetime(df.index.date)
+            return df.dropna()
+        # 美股用 yfinance
+        else:
             df = yf.download(symbol, period=period, auto_adjust=True, progress=False)
             if df.empty:
                 return None
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+            df.index = pd.to_datetime(df.index.date)
+            return df
     except Exception:
-            return None
+        return None
 def get_company_name(symbol: str) -> str:
     try:
         return yf.Ticker(symbol).info.get("shortName", symbol)

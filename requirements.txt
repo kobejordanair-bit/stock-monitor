@@ -4,3 +4,4 @@ pandas
 numpy
 plotly
 websockets>=13.0
+twstock
