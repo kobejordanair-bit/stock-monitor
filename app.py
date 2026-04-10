@@ -111,12 +111,54 @@ with st.expander("📖 使用說明與功能介紹"):
 ### 🔔 價格警示
 分析結果頁面展開「設定價格警示」，設定目標價與條件（突破或跌破）。切換到「價格警示」Tab 可查看所有警示的即時狀態。
 
-### 📊 三大指標說明
-**Force Index EMA（力道指數）**：衡量推動股價的資金力道。正值代表買方主導，負值代表賣方主導。出現「頂背離」代表股價漲但力道衰竭，是大戶出貨的警訊。
+---
 
-**ATR 動態停損**：根據股票當前波動幅度自動計算停損價，波動大時停損拉遠、波動小時停損拉近，避免被雜訊洗掉。
+### 📊 指標詳細說明
 
-**科學部位控管**：根據你設定的本金與風險比例，自動計算建議買入張數，確保單筆最大虧損不超過本金的設定比例。
+**🟢 綜合訊號（最重要）**
+三個指標同時看多 → 「強力買進訊號」；同時看空 → 「強力賣出訊號」。
+只有一兩個指標同向則顯示「謹慎偏多/空」。**建議只在三指標同向時才行動，單一指標說買不算數。**
+
+---
+
+**Force Index EMA（力道指數）**
+計算公式：`成交量 × (今收 - 昨收)`，再取 EMA 平滑。
+- 正值：買方主導，資金在推動股價上漲
+- 負值：賣方主導，資金在壓低股價
+- **頂背離**：股價創新高，但 FI EMA 沒有跟上 → 代表大戶在出貨，是最常見的假突破警訊
+- **底背離**：股價創新低，但 FI EMA 沒有跟著創低 → 代表低檔有買盤悄悄進場
+
+---
+
+**RSI（相對強弱指數，14日）**
+衡量近期漲幅相對於跌幅的比例，數值在 0～100 之間。
+- **高於 70**：超買區，股價漲太快，短期可能回調，不適合追高
+- **低於 30**：超賣區，股價跌太深，短期可能反彈，可以留意買點
+- **30～70**：正常區間，搭配其他指標判斷
+- 重點：RSI 超買不代表一定會跌，超賣不代表一定會漲，要搭配 FI 和 MACD 確認
+
+---
+
+**MACD（指數平滑異同移動平均線，12/26/9）**
+用快線（12日EMA）減慢線（26日EMA）得到 MACD 線，再對 MACD 線取 9 日 EMA 得到訊號線。
+- **金叉**：MACD 線從下往上穿越訊號線 → 短期動能轉強，看多訊號
+- **死叉**：MACD 線從上往下穿越訊號線 → 短期動能轉弱，看空訊號
+- **柱狀圖（Histogram）**：MACD 線與訊號線的差距，紅色擴大代表多頭加速，縮小代表動能衰竭
+
+---
+
+**ATR 動態停損**
+ATR 衡量股票真實波動幅度。停損 = 收盤價 - ATR × 倍數。
+波動大時停損自動拉遠，避免被雜訊洗掉；波動小時停損拉近，保護獲利。
+建議倍數 2.5，如果個股波動特別大可調到 3。
+
+---
+
+**科學部位控管**
+單筆最大虧損 = 本金 × 風險比例，根據停損距離反推最大持有股數。
+建議每筆風險不超過本金 2%，這樣即使連續錯 10 次，本金只損失約 20%，不會一次賠光。
+
+---
 
 ### ⚙️ 左側參數設定
 - **總本金**：你的實際投入資金
@@ -242,6 +284,46 @@ def detect_divergence(close, fi_ema, lookback=10):
         return "👀 底背離（邊跌邊買）"
     return "✅ 無明顯背離"
 
+
+def calc_rsi(close, period=14):
+    delta = close.diff()
+    gain = delta.clip(lower=0).ewm(com=period-1, adjust=False).mean()
+    loss = (-delta.clip(upper=0)).ewm(com=period-1, adjust=False).mean()
+    rs = gain / loss.replace(0, float('inf'))
+    return 100 - (100 / (1 + rs))
+
+def calc_macd(close, fast=12, slow=26, signal=9):
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+def get_composite_signal(fi_momentum: str, rsi: float, macd_line: float, signal_line: float) -> tuple[str, str]:
+    """
+    三指標交叉驗證，回傳 (訊號, 說明)
+    買進條件：FI 多頭 + RSI 未超買（<70）+ MACD 金叉或正值
+    賣出條件：FI 空頭 + RSI 未超賣（>30）+ MACD 死叉或負值
+    """
+    fi_bull = "多頭" in fi_momentum
+    fi_bear = "空頭" in fi_momentum
+    rsi_ok_buy = rsi < 70
+    rsi_ok_sell = rsi > 30
+    macd_bull = macd_line > signal_line
+    macd_bear = macd_line < signal_line
+
+    if fi_bull and rsi_ok_buy and macd_bull:
+        return "🟢 強力買進訊號", f"三指標同向看多｜RSI {rsi:.1f}（未超買）"
+    elif fi_bear and rsi_ok_sell and macd_bear:
+        return "🔴 強力賣出訊號", f"三指標同向看空｜RSI {rsi:.1f}（未超賣）"
+    elif fi_bull and (not macd_bull or not rsi_ok_buy):
+        return "🟡 謹慎偏多", f"FI 看多但 RSI {rsi:.1f} 或 MACD 未確認"
+    elif fi_bear and (not macd_bear or not rsi_ok_sell):
+        return "🟡 謹慎偏空", f"FI 看空但 RSI {rsi:.1f} 或 MACD 未確認"
+    else:
+        return "⚪ 訊號不明", f"指標分歧，建議觀望｜RSI {rsi:.1f}"
+
 def calc_position(last_close, atr):
     stop_dist = atr * atr_mult
     stop_loss = last_close - stop_dist
@@ -263,6 +345,14 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     momentum = ("🟢 多頭動能" if last_fi > 0 and fi_slope > 0
                 else "🔴 空頭動能" if last_fi < 0 and fi_slope < 0
                 else "🟡 中性觀望")
+
+    # RSI + MACD
+    rsi_series = calc_rsi(df["Close"])
+    macd_line, signal_line, macd_hist = calc_macd(df["Close"])
+    last_rsi = float(rsi_series.iloc[-1])
+    last_macd = float(macd_line.iloc[-1])
+    last_signal = float(signal_line.iloc[-1])
+    composite_signal, composite_note = get_composite_signal(momentum, last_rsi, last_macd, last_signal)
 
     st.divider()
     col_title, col_add = st.columns([4, 1])
@@ -287,11 +377,29 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     c3.metric("建議停損", f"{stop_loss:.2f}", delta=f"-{last_atr*atr_mult:.2f}", delta_color="inverse")
     c4.metric(f"建議部位（{'張' if lot_size==1000 else '股'}）", f"{lots}")
 
-    st.info(f"**動能狀態**：{momentum}")
-    if "背離" in divergence and "無" not in divergence:
-        st.warning(f"**背離訊號**：{divergence}")
+    # 綜合訊號（最醒目放最上面）
+    if "強力買進" in composite_signal:
+        st.success(f"### {composite_signal}")
+        st.caption(composite_note)
+    elif "強力賣出" in composite_signal:
+        st.error(f"### {composite_signal}")
+        st.caption(composite_note)
     else:
-        st.success(f"**背離訊號**：{divergence}")
+        st.warning(f"### {composite_signal}")
+        st.caption(composite_note)
+
+    # 三指標個別狀態
+    col_fi, col_rsi, col_macd = st.columns(3)
+    col_fi.info(f"**FI 動能**：{momentum}")
+
+    rsi_status = "🔴 超買" if last_rsi > 70 else "🟢 超賣" if last_rsi < 30 else "🟡 中性"
+    col_rsi.info(f"**RSI（14）**：{last_rsi:.1f}　{rsi_status}")
+
+    macd_status = "🟢 金叉" if last_macd > last_signal else "🔴 死叉"
+    col_macd.info(f"**MACD**：{macd_status}　差距 {last_macd - last_signal:.2f}")
+
+    if "背離" in divergence and "無" not in divergence:
+        st.warning(f"**FI 背離訊號**：{divergence}")
     st.info(f"**最大風險**：{actual_risk:,.0f} 元（本金 {risk_pct*100:.0f}%）")
 
     with st.expander("🔔 設定價格警示"):
@@ -302,18 +410,39 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
             db_insert("alerts", {"symbol": symbol, "name": company_name, "target_price": target_price, "direction": direction})
             st.toast(f"警示已設定：{symbol} {direction} {target_price}")
 
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.55, 0.25, 0.20],
-                        vertical_spacing=0.03, subplot_titles=("K線 + 停損線", f"Force Index EMA（{fi_period}）", "成交量"))
+    fig = make_subplots(rows=5, cols=1, shared_xaxes=True,
+                        row_heights=[0.40, 0.15, 0.15, 0.15, 0.15],
+                        vertical_spacing=0.02,
+                        subplot_titles=("K線 + 停損線", f"Force Index EMA（{fi_period}）", "RSI（14）", "MACD（12/26/9）", "成交量"))
+
+    # K線
     fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
                                   name="K線", increasing_line_color="#ef5350", decreasing_line_color="#26a69a"), row=1, col=1)
     fig.add_hline(y=stop_loss, line_dash="dash", line_color="orange", line_width=1.5,
                   annotation_text=f"停損 {stop_loss:.2f}", annotation_position="right", row=1, col=1)
+
+    # Force Index EMA
     fi_colors = ["#ef5350" if v >= 0 else "#26a69a" for v in fi_ema]
     fig.add_trace(go.Bar(x=fi_ema.index, y=fi_ema.values, marker_color=fi_colors, name="FI EMA"), row=2, col=1)
     fig.add_hline(y=0, line_color="gray", line_width=0.8, row=2, col=1)
+
+    # RSI
+    fig.add_trace(go.Scatter(x=rsi_series.index, y=rsi_series.values, line=dict(color="#ab47bc", width=1.5), name="RSI"), row=3, col=1)
+    fig.add_hline(y=70, line_dash="dot", line_color="#ef5350", line_width=1, row=3, col=1)
+    fig.add_hline(y=30, line_dash="dot", line_color="#26a69a", line_width=1, row=3, col=1)
+
+    # MACD
+    hist_colors = ["#ef5350" if v >= 0 else "#26a69a" for v in macd_hist]
+    fig.add_trace(go.Bar(x=macd_hist.index, y=macd_hist.values, marker_color=hist_colors, name="MACD Hist"), row=4, col=1)
+    fig.add_trace(go.Scatter(x=macd_line.index, y=macd_line.values, line=dict(color="#42a5f5", width=1.2), name="MACD"), row=4, col=1)
+    fig.add_trace(go.Scatter(x=signal_line.index, y=signal_line.values, line=dict(color="#ff7043", width=1.2), name="Signal"), row=4, col=1)
+    fig.add_hline(y=0, line_color="gray", line_width=0.8, row=4, col=1)
+
+    # 成交量
     vol_colors = ["#ef5350" if df["Close"].iloc[i] >= df["Open"].iloc[i] else "#26a69a" for i in range(len(df))]
-    fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=vol_colors, name="成交量"), row=3, col=1)
-    fig.update_layout(height=600, showlegend=False, xaxis_rangeslider_visible=False,
+    fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=vol_colors, name="成交量"), row=5, col=1)
+
+    fig.update_layout(height=900, showlegend=False, xaxis_rangeslider_visible=False,
                       plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa")
     fig.update_xaxes(gridcolor="#2a2a2a")
     fig.update_yaxes(gridcolor="#2a2a2a")
