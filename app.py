@@ -75,6 +75,26 @@ if "symbol" not in st.session_state:
     st.session_state.market = None
     st.session_state.company = None
 
+
+# 手機版 CSS 優化
+st.markdown("""
+<style>
+/* 手機版字體放大 */
+@media (max-width: 768px) {
+    .stMetric { padding: 8px 4px !important; }
+    .stMetric label { font-size: 12px !important; }
+    .stMetric [data-testid="stMetricValue"] { font-size: 20px !important; }
+    .stButton button { font-size: 16px !important; padding: 10px !important; }
+    .stTextInput input { font-size: 16px !important; }
+    h1 { font-size: 24px !important; }
+    h2 { font-size: 18px !important; }
+    h3 { font-size: 16px !important; }
+    /* 側邊欄在手機預設收起 */
+    [data-testid="stSidebar"] { min-width: 0 !important; }
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("📡 股票動能分析系統")
 st.caption("支援台股（如 2330）與美股（如 NVDA）｜指標：Force Index EMA、ATR 停損、部位控管")
 with st.expander("📖 使用說明與功能介紹"):
@@ -157,7 +177,6 @@ def parse_symbol(raw: str) -> tuple[str, str]:
         return f"{raw}.TW", "台股"
     return raw, "美股"
 
-@st.cache_data(ttl=300)
 @st.cache_data(ttl=300)
 def fetch_data(symbol: str, period: str):
     try:
@@ -261,19 +280,19 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     else:
         col_add.success("已在自選")
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2 = st.columns(2)
     c1.metric("收盤價", f"{last_close:.2f}")
     c2.metric("ATR（波動度）", f"{last_atr:.2f}")
+    c3, c4 = st.columns(2)
     c3.metric("建議停損", f"{stop_loss:.2f}", delta=f"-{last_atr*atr_mult:.2f}", delta_color="inverse")
     c4.metric(f"建議部位（{'張' if lot_size==1000 else '股'}）", f"{lots}")
 
-    col_m, col_d, col_r = st.columns(3)
-    col_m.info(f"**動能狀態**：{momentum}")
+    st.info(f"**動能狀態**：{momentum}")
     if "背離" in divergence and "無" not in divergence:
-        col_d.warning(f"**背離訊號**：{divergence}")
+        st.warning(f"**背離訊號**：{divergence}")
     else:
-        col_d.success(f"**背離訊號**：{divergence}")
-    col_r.info(f"**最大風險**：{actual_risk:,.0f} 元（本金 {risk_pct*100:.0f}%）")
+        st.success(f"**背離訊號**：{divergence}")
+    st.info(f"**最大風險**：{actual_risk:,.0f} 元（本金 {risk_pct*100:.0f}%）")
 
     with st.expander("🔔 設定價格警示"):
         col_p, col_dir, col_btn = st.columns([2, 2, 1])
@@ -294,7 +313,7 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     fig.add_hline(y=0, line_color="gray", line_width=0.8, row=2, col=1)
     vol_colors = ["#ef5350" if df["Close"].iloc[i] >= df["Open"].iloc[i] else "#26a69a" for i in range(len(df))]
     fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=vol_colors, name="成交量"), row=3, col=1)
-    fig.update_layout(height=700, showlegend=False, xaxis_rangeslider_visible=False,
+    fig.update_layout(height=600, showlegend=False, xaxis_rangeslider_visible=False,
                       plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa")
     fig.update_xaxes(gridcolor="#2a2a2a")
     fig.update_yaxes(gridcolor="#2a2a2a")
@@ -359,14 +378,18 @@ with tab_alerts:
         for row in alert_rows:
             df_check = fetch_data(row["symbol"], "5d")
             current_price = float(df_check["Close"].iloc[-1]) if df_check is not None else None
-            col_s, col_t, col_c, col_status, col_del = st.columns([1.5, 1.5, 1.5, 2, 1])
-            col_s.write(f"**{row['symbol']}**")
-            col_t.write(f"目標：{row['target_price']}")
-            col_c.write(f"現價：{current_price:.2f}" if current_price else "無法取得")
-            if current_price:
-                triggered = ((row["direction"] == "跌破此價格" and current_price < row["target_price"]) or
-                             (row["direction"] == "突破此價格" and current_price > row["target_price"]))
-                col_status.error(f"🚨 已{row['direction']}！") if triggered else col_status.success("監控中")
-            if col_del.button("刪除", key=f"del_alert_{row['id']}"):
-                db_delete("alerts", row["id"])
-                st.rerun()
+            with st.container(border=True):
+                col_info, col_del = st.columns([5, 1])
+                with col_info:
+                    st.write(f"**{row['symbol']}** {row['name']}")
+                    st.caption(f"目標：{row['target_price']} ｜ 現價：{current_price:.2f}" if current_price else f"目標：{row['target_price']} ｜ 現價：無法取得")
+                    if current_price:
+                        triggered = ((row["direction"] == "跌破此價格" and current_price < row["target_price"]) or
+                                     (row["direction"] == "突破此價格" and current_price > row["target_price"]))
+                        if triggered:
+                            st.error(f"🚨 已{row['direction']}！")
+                        else:
+                            st.success(f"✅ 監控中：{row['direction']}")
+                if col_del.button("🗑️", key=f"del_alert_{row['id']}"):
+                    db_delete("alerts", row["id"])
+                    st.rerun()
