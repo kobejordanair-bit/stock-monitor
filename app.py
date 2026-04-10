@@ -77,7 +77,33 @@ if "symbol" not in st.session_state:
 
 st.title("📡 股票動能分析系統")
 st.caption("支援台股（如 2330）與美股（如 NVDA）｜指標：Force Index EMA、ATR 停損、部位控管")
+with st.expander("📖 使用說明與功能介紹"):
+    st.markdown("""
+### 🔍 查詢股票
+輸入股票代號後點「開始分析」，台股輸入數字（如 `2330`），美股輸入英文（如 `NVDA`）。
 
+### ⭐ 自選清單
+分析完後點右上角「加入自選」可儲存股票。左側欄直接點股票名稱即可快速查詢，點 ✕ 刪除。
+
+### 🔄 自選清單掃描
+切換到「自選清單掃描」Tab，一鍵掃描所有自選股，不用一支一支查。
+
+### 🔔 價格警示
+分析結果頁面展開「設定價格警示」，設定目標價與條件（突破或跌破）。切換到「價格警示」Tab 可查看所有警示的即時狀態。
+
+### 📊 三大指標說明
+**Force Index EMA（力道指數）**：衡量推動股價的資金力道。正值代表買方主導，負值代表賣方主導。出現「頂背離」代表股價漲但力道衰竭，是大戶出貨的警訊。
+
+**ATR 動態停損**：根據股票當前波動幅度自動計算停損價，波動大時停損拉遠、波動小時停損拉近，避免被雜訊洗掉。
+
+**科學部位控管**：根據你設定的本金與風險比例，自動計算建議買入張數，確保單筆最大虧損不超過本金的設定比例。
+
+### ⚙️ 左側參數設定
+- **總本金**：你的實際投入資金
+- **單筆最大虧損**：建議設 2%，即每筆交易最多虧本金的 2%
+- **ATR 停損倍數**：建議 2.5，波動劇烈時可調高到 3
+- **每張股數**：台股選 1000，美股選 1
+    """)
 # ─────────────────────────────────────────────
 #  側邊欄
 # ─────────────────────────────────────────────
@@ -98,10 +124,14 @@ with st.sidebar:
     watchlist_rows = db_select("watchlist", order_col="added_at", desc=True)
     if not SUPABASE_KEY:
         st.caption("⚠️ 資料庫未設定")
-    elif watchlist_rows:
+    if watchlist_rows:
         for row in watchlist_rows:
             col_w, col_del = st.columns([3, 1])
-            col_w.write(f"`{row['symbol']}` {row['name']}")
+            if col_w.button(f"`{row['symbol']}` {row['name']}", key=f"watch_{row['id']}"):
+                st.session_state.symbol = row["symbol"]
+                st.session_state.market = "台股" if row["symbol"].endswith(".TW") else "美股"
+                st.session_state.company = row["name"]
+                st.rerun()
             if col_del.button("✕", key=f"del_{row['id']}"):
                 db_delete("watchlist", row["id"])
                 st.rerun()
