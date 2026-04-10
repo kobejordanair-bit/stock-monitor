@@ -132,15 +132,13 @@ def fetch_data(symbol: str, period: str):
     try:
         df = yf.download(symbol, period=period, auto_adjust=True, progress=False)
         if df.empty:
-            return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
-        df.index = pd.to_datetime(df.index.date)
-        return df
+            import time
+            time.sleep(3)
+            df = yf.download(symbol, period=period, auto_adjust=True, progress=False)
+            if df.empty:
+                return None
     except Exception:
-        return None
-
+            return None
 def get_company_name(symbol: str) -> str:
     try:
         return yf.Ticker(symbol).info.get("shortName", symbol)
