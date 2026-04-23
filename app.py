@@ -357,8 +357,9 @@ def calc_position(last_close, atr):
     stop_dist = atr * atr_mult
     stop_loss = last_close - stop_dist
     shares = (capital * risk_pct) / stop_dist if stop_dist > 0 else 0
-    lots = max(1, int(shares // lot_size))
-    return stop_loss, lots * lot_size * stop_dist, lots
+    lots = int(shares // lot_size)
+    actual_risk = lots * lot_size * stop_dist
+    return stop_loss, actual_risk, lots
 
 def render_analysis(symbol: str, market: str, df, company_name: str):
     df = resample_ohlcv(df, timeframe)
@@ -405,7 +406,7 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     c2.metric("ATR（波動度）", f"{last_atr:.2f}")
     c3, c4 = st.columns(2)
     c3.metric("建議停損", f"{stop_loss:.2f}", delta=f"-{last_atr*atr_mult:.2f}", delta_color="inverse")
-    c4.metric(f"建議部位（{'張' if lot_size==1000 else '股'}）", f"{lots}")
+    c4.metric(f"建議部位（{'張' if lot_size==1000 else '股'}）", f"{lots}" if lots > 0 else "⚠️ 0")
 
     # 綜合訊號（最醒目放最上面）
     if "強力買進" in composite_signal:
@@ -430,7 +431,13 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
 
     if "背離" in divergence and "無" not in divergence:
         st.warning(f"**FI 背離訊號**：{divergence}")
-    st.info(f"**最大風險**：{actual_risk:,.0f} 元（本金 {risk_pct*100:.0f}%）")
+
+    budget = capital * risk_pct
+    if lots == 0:
+        st.error(f"⚠️ 波動過大：依目前風險設定（{risk_pct*100:.0f}% = {budget:,.0f} 元）不足以建倉一張，建議降低 ATR 倍數或提高風險比例。")
+    else:
+        risk_label = f"{actual_risk/capital*100:.1f}%"
+        st.info(f"**風險預算**：{budget:,.0f} 元（{risk_pct*100:.0f}%）｜**實際風險**：{actual_risk:,.0f} 元（{risk_label}）")
 
     with st.expander("🔔 設定價格警示"):
         col_p, col_dir, col_btn = st.columns([2, 2, 1])
