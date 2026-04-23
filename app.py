@@ -210,6 +210,7 @@ with st.sidebar:
     timeframe = st.radio("K線週期", ["日線", "週線", "月線"], index=0, horizontal=True)
     show_ma = st.multiselect("均線", [5, 20, 60], default=[5, 20, 60])
     show_bb = st.checkbox("布林通道（20,2）", value=True)
+    show_benchmark = st.checkbox("對比大盤（台股加權 / S&P 500）", value=False)
 
     st.divider()
     st.subheader("⭐ 自選清單")
@@ -302,6 +303,41 @@ def get_company_name(symbol: str) -> str:
         return yf.Ticker(symbol).info.get("shortName", symbol)
     except:
         return symbol
+
+@st.cache_data(ttl=3600)
+def get_fundamentals(symbol: str) -> dict:
+    if symbol.endswith(".TW"):
+        return {}
+    try:
+        info = yf.Ticker(symbol).info
+        result = {}
+        if info.get("trailingPE"):
+            result["本益比 P/E"] = f"{info['trailingPE']:.1f}"
+        if info.get("marketCap"):
+            cap = info["marketCap"]
+            result["市值"] = f"${cap/1e9:.1f}B" if cap >= 1e9 else f"${cap/1e6:.0f}M"
+        if info.get("dividendYield"):
+            result["殖利率"] = f"{info['dividendYield']*100:.2f}%"
+        if info.get("fiftyTwoWeekHigh") and info.get("fiftyTwoWeekLow"):
+            result["52週區間"] = f"{info['fiftyTwoWeekLow']:.2f} ～ {info['fiftyTwoWeekHigh']:.2f}"
+        if info.get("trailingEps"):
+            result["EPS"] = f"{info['trailingEps']:.2f}"
+        return result
+    except Exception:
+        return {}
+
+@st.cache_data(ttl=300)
+def fetch_benchmark(market: str, period: str):
+    ticker = "^TWII" if market == "台股" else "^GSPC"
+    try:
+        df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
+        if df.empty:
+            return None
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df[["Close"]].dropna()
+    except Exception:
+        return None
 
 def calc_fi_ema(df, period):
     return (df["Volume"] * df["Close"].diff()).ewm(span=period, adjust=False).mean()
@@ -484,6 +520,13 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
         risk_label = f"{actual_risk/capital*100:.1f}%"
         st.info(f"**風險預算**：{budget:,.0f} 元（{risk_pct*100:.0f}%）｜**實際風險**：{actual_risk:,.0f} 元（{risk_label}）")
 
+    fundamentals = get_fundamentals(symbol)
+    if fundamentals:
+        with st.expander("📋 基本面資料（美股）"):
+            cols = st.columns(len(fundamentals))
+            for i, (k, v) in enumerate(fundamentals.items()):
+                cols[i].metric(k, v)
+
     with st.expander("🔔 設定價格警示"):
         col_p, col_dir, col_btn = st.columns([2, 2, 1])
         target_price = col_p.number_input("目標價", value=float(round(last_close*0.95, 1)), key=f"tp_{symbol}")
@@ -560,6 +603,30 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
                      spikecolor="rgba(255,255,255,0.25)", spikethickness=1, spikedash="solid")
     fig.update_yaxes(gridcolor="#2a2a2a")
     st.plotly_chart(fig, use_container_width=True)
+
+    if show_benchmark:
+        bench_df = fetch_benchmark(market, data_period)
+        if bench_df is not None:
+            common_idx = df.index.intersection(bench_df.index)
+            if len(common_idx) > 5:
+                s_norm = df["Close"].loc[common_idx] / df["Close"].loc[common_idx].iloc[0] * 100
+                b_norm = bench_df["Close"].loc[common_idx] / bench_df["Close"].loc[common_idx].iloc[0] * 100
+                bench_name = "台股加權指數" if market == "台股" else "S&P 500"
+                bfig = go.Figure()
+                bfig.add_trace(go.Scatter(x=s_norm.index, y=s_norm.values, name=symbol,
+                                           line=dict(color="#ef5350", width=2)))
+                bfig.add_trace(go.Scatter(x=b_norm.index, y=b_norm.values, name=bench_name,
+                                           line=dict(color="#42a5f5", width=2)))
+                bfig.add_hline(y=100, line_dash="dot", line_color="gray", line_width=1)
+                bfig.update_layout(
+                    title=f"與大盤相對表現（起始基準 = 100）",
+                    height=260, margin=dict(t=40, b=20),
+                    plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
+                    hovermode="x", legend=dict(orientation="h")
+                )
+                bfig.update_xaxes(gridcolor="#2a2a2a")
+                bfig.update_yaxes(gridcolor="#2a2a2a")
+                st.plotly_chart(bfig, use_container_width=True)
 
 # ─────────────────────────────────────────────
 #  主畫面 Tab
