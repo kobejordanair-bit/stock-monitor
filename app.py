@@ -182,6 +182,11 @@ with st.sidebar:
     lot_size = st.radio("每張股數", [1000, 1], index=0, help="台股選 1000；美股選 1")
 
     st.divider()
+    st.subheader("📊 圖表指標")
+    show_ma = st.multiselect("均線", [5, 20, 60], default=[5, 20, 60])
+    show_bb = st.checkbox("布林通道（20,2）", value=True)
+
+    st.divider()
     st.subheader("⭐ 自選清單")
     watchlist_rows = db_select("watchlist", order_col="added_at", desc=True)
     if not SUPABASE_KEY:
@@ -329,6 +334,14 @@ def get_composite_signal(fi_momentum: str, rsi: float, macd_line: float, signal_
     else:
         return "⚪ 訊號不明", f"指標分歧，建議觀望｜RSI {rsi:.1f}"
 
+def calc_ma(close, periods):
+    return {p: close.rolling(p).mean() for p in periods}
+
+def calc_bollinger(close, period=20, std=2):
+    ma = close.rolling(period).mean()
+    sigma = close.rolling(period).std()
+    return ma + std * sigma, ma, ma - std * sigma
+
 def calc_position(last_close, atr):
     stop_dist = atr * atr_mult
     stop_loss = last_close - stop_dist
@@ -426,6 +439,26 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     fig.add_hline(y=stop_loss, line_dash="dash", line_color="orange", line_width=1.5,
                   annotation_text=f"停損 {stop_loss:.2f}", annotation_position="right", row=1, col=1)
 
+    # 均線
+    ma_colors = {5: "#ffd54f", 20: "#42a5f5", 60: "#ef5350"}
+    if show_ma:
+        ma_data = calc_ma(df["Close"], show_ma)
+        for p in show_ma:
+            fig.add_trace(go.Scatter(x=ma_data[p].index, y=ma_data[p].values,
+                                     line=dict(color=ma_colors.get(p, "#ffffff"), width=1.2),
+                                     name=f"MA{p}"), row=1, col=1)
+
+    # 布林通道
+    if show_bb:
+        bb_upper, bb_mid, bb_lower = calc_bollinger(df["Close"])
+        fig.add_trace(go.Scatter(x=bb_upper.index, y=bb_upper.values,
+                                  line=dict(color="rgba(100,181,246,0.6)", width=1),
+                                  name="BB上軌", showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=bb_lower.index, y=bb_lower.values,
+                                  fill="tonexty", fillcolor="rgba(100,181,246,0.06)",
+                                  line=dict(color="rgba(100,181,246,0.6)", width=1),
+                                  name="BB下軌", showlegend=False), row=1, col=1)
+
     # Force Index EMA
     fi_colors = ["#ef5350" if v >= 0 else "#26a69a" for v in fi_ema]
     fig.add_trace(go.Bar(x=fi_ema.index, y=fi_ema.values, marker_color=fi_colors, name="FI EMA"), row=2, col=1)
@@ -446,10 +479,18 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     # 成交量
     vol_colors = ["#ef5350" if df["Close"].iloc[i] >= df["Open"].iloc[i] else "#26a69a" for i in range(len(df))]
     fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=vol_colors, name="成交量"), row=5, col=1)
+    vol_ma = df["Volume"].rolling(20).mean()
+    fig.add_trace(go.Scatter(x=vol_ma.index, y=vol_ma.values,
+                              line=dict(color="#ffd54f", width=1.2), name="Vol MA20"), row=5, col=1)
 
-    fig.update_layout(height=900, showlegend=False, xaxis_rangeslider_visible=False,
-                      plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa")
-    fig.update_xaxes(gridcolor="#2a2a2a")
+    fig.update_layout(height=900, showlegend=True, xaxis_rangeslider_visible=False,
+                      plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
+                      hovermode="x",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
+                                  font=dict(size=11), bgcolor="rgba(0,0,0,0)"))
+    fig.update_xaxes(gridcolor="#2a2a2a",
+                     showspikes=True, spikemode="across+toaxis", spikesnap="cursor",
+                     spikecolor="rgba(255,255,255,0.25)", spikethickness=1, spikedash="solid")
     fig.update_yaxes(gridcolor="#2a2a2a")
     st.plotly_chart(fig, use_container_width=True)
 
