@@ -289,8 +289,8 @@ def calc_rsi(close, period=14):
     delta = close.diff()
     gain = delta.clip(lower=0).ewm(com=period-1, adjust=False).mean()
     loss = (-delta.clip(upper=0)).ewm(com=period-1, adjust=False).mean()
-    rs = gain / loss.replace(0, float('inf'))
-    return 100 - (100 / (1 + rs))
+    rs = gain / loss.where(loss != 0, other=np.nan)
+    return rs.apply(lambda x: 100 if np.isnan(x) else 100 - 100 / (1 + x))
 
 def calc_macd(close, fast=12, slow=26, signal=9):
     ema_fast = close.ewm(span=fast, adjust=False).mean()
