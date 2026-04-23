@@ -1,7 +1,6 @@
-streamlit
-yfinance
-pandas
-numpy
-plotly
-websockets>=13.0
-twstock
+streamlit>=1.30
+yfinance>=0.2.40
+pandas>=2.0
+numpy>=1.26
+plotly>=5.18
+twstock>=1.3
