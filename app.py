@@ -353,6 +353,23 @@ def resample_ohlcv(df, timeframe: str):
     except ValueError:
         return df.resample("M").agg(agg).dropna()
 
+def quick_signal(df) -> str:
+    try:
+        df_r = resample_ohlcv(df, timeframe)
+        fi_ema = calc_fi_ema(df_r, fi_period)
+        lookback = min(3, len(fi_ema) - 1)
+        fi_slope = float(fi_ema.iloc[-1] - fi_ema.iloc[-1 - lookback]) if lookback > 0 else 0.0
+        last_fi = float(fi_ema.iloc[-1])
+        momentum = ("🟢 多頭動能" if last_fi > 0 and fi_slope > 0
+                    else "🔴 空頭動能" if last_fi < 0 and fi_slope < 0
+                    else "🟡 中性觀望")
+        rsi_s = calc_rsi(df_r["Close"])
+        macd_l, sig_l, _ = calc_macd(df_r["Close"])
+        signal, _ = get_composite_signal(momentum, float(rsi_s.iloc[-1]), float(macd_l.iloc[-1]), float(sig_l.iloc[-1]))
+        return signal
+    except Exception:
+        return "❓ 計算失敗"
+
 def calc_position(last_close, atr, lot_size):
     stop_dist = atr * atr_mult
     stop_loss = last_close - stop_dist
@@ -557,16 +574,32 @@ with tab_watchlist:
     if not watchlist_rows:
         st.info("自選清單是空的，先查詢股票後點「⭐ 加入自選」。")
     else:
-        if st.button("🔄 一鍵掃描所有自選股", type="primary"):
+        col_scan, col_filter = st.columns([2, 2])
+        scan_btn = col_scan.button("🔄 一鍵掃描所有自選股", type="primary")
+        strong_only = col_filter.checkbox("只顯示強訊號", value=False)
+
+        if scan_btn:
+            results = []
             for row in watchlist_rows:
                 sym = row["symbol"]
                 mkt = "台股" if sym.endswith(".TW") else "美股"
-                with st.spinner(f"分析 {sym}..."):
+                with st.spinner(f"抓取 {sym}..."):
                     df = fetch_data(sym, data_period)
-                if df is not None and len(df) >= 30:
-                    render_analysis(sym, mkt, df, row["name"])
+                sig = quick_signal(df) if df is not None and len(df) >= 30 else "❓ 資料不足"
+                results.append({"symbol": sym, "name": row["name"], "market": mkt, "signal": sig, "df": df})
+
+            st.subheader("📋 掃描摘要")
+            summary_df = pd.DataFrame([{"代號": r["symbol"], "名稱": r["name"], "綜合訊號": r["signal"]} for r in results])
+            st.dataframe(summary_df, hide_index=True, use_container_width=True)
+            st.divider()
+
+            for r in results:
+                if strong_only and "強力" not in r["signal"]:
+                    continue
+                if r["df"] is not None and len(r["df"]) >= 30:
+                    render_analysis(r["symbol"], r["market"], r["df"], r["name"])
                 else:
-                    st.warning(f"{sym} 資料抓取失敗，跳過")
+                    st.warning(f"{r['symbol']} 資料抓取失敗，跳過")
 
 with tab_alerts:
     alert_rows = db_select("alerts", order_col="created_at", desc=True)
