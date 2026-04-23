@@ -260,8 +260,13 @@ def fetch_data(symbol: str, period: str):
             return df
     except Exception:
         return None
+@st.cache_data(ttl=86400)
 def get_company_name(symbol: str) -> str:
     try:
+        if symbol.endswith(".TW"):
+            import twstock
+            code = symbol.replace(".TW", "")
+            return twstock.codes[code].name if code in twstock.codes else symbol
         return yf.Ticker(symbol).info.get("shortName", symbol)
     except:
         return symbol
