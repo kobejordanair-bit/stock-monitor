@@ -70,10 +70,9 @@ def db_delete(table: str, row_id: int) -> bool:
 
 st.set_page_config(page_title="股票動能分析系統", page_icon="📡", layout="wide")
 # session_state 初始化
-if "symbol" not in st.session_state:
-    st.session_state.symbol = None
-    st.session_state.market = None
-    st.session_state.company = None
+st.session_state.setdefault("symbol", None)
+st.session_state.setdefault("market", None)
+st.session_state.setdefault("company", None)
 
 
 # 手機版 CSS 優化
@@ -221,6 +220,8 @@ with st.sidebar:
 
 def parse_symbol(raw: str) -> tuple[str, str]:
     raw = raw.strip().upper()
+    if raw.endswith(".TW"):
+        return raw, "台股"
     if raw.isdigit():
         return f"{raw}.TW", "台股"
     return raw, "美股"
@@ -370,7 +371,8 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     last_close = float(df["Close"].iloc[-1])
     last_fi = float(fi_ema.iloc[-1])
     last_atr = float(atr_series.iloc[-1])
-    fi_slope = float(fi_ema.iloc[-1] - fi_ema.iloc[-3])
+    lookback = min(3, len(fi_ema) - 1)
+    fi_slope = float(fi_ema.iloc[-1] - fi_ema.iloc[-1 - lookback]) if lookback > 0 else 0.0
     stop_loss, actual_risk, lots = calc_position(last_close, last_atr)
 
     momentum = ("🟢 多頭動能" if last_fi > 0 and fi_slope > 0
@@ -444,8 +446,11 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
         target_price = col_p.number_input("目標價", value=float(round(last_close*0.95, 1)), key=f"tp_{symbol}")
         direction = col_dir.selectbox("條件", ["跌破此價格", "突破此價格"], key=f"dir_{symbol}")
         if col_btn.button("設定", key=f"alert_{symbol}"):
-            db_insert("alerts", {"symbol": symbol, "name": company_name, "target_price": target_price, "direction": direction})
-            st.toast(f"警示已設定：{symbol} {direction} {target_price}")
+            ok = db_insert("alerts", {"symbol": symbol, "name": company_name, "target_price": target_price, "direction": direction})
+            if ok:
+                st.toast(f"警示已設定：{symbol} {direction} {target_price}")
+            else:
+                st.error("設定失敗，請確認資料庫連線")
 
     fig = make_subplots(rows=5, cols=1, shared_xaxes=True,
                         row_heights=[0.40, 0.15, 0.15, 0.15, 0.15],
