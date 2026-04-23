@@ -178,7 +178,6 @@ with st.sidebar:
     atr_period = st.selectbox("ATR 週期", [7, 14, 21], index=1)
     period_map = {"1 個月": "1mo", "3 個月": "3mo", "6 個月": "6mo", "1 年": "1y"}
     data_period = period_map[st.selectbox("K線資料範圍", list(period_map.keys()), index=2)]
-    lot_size = st.radio("每張股數", [1000, 1], index=0, help="台股選 1000；美股選 1")
 
     st.divider()
     st.subheader("📊 圖表指標")
@@ -354,7 +353,7 @@ def resample_ohlcv(df, timeframe: str):
     except ValueError:
         return df.resample("M").agg(agg).dropna()
 
-def calc_position(last_close, atr):
+def calc_position(last_close, atr, lot_size):
     stop_dist = atr * atr_mult
     stop_loss = last_close - stop_dist
     shares = (capital * risk_pct) / stop_dist if stop_dist > 0 else 0
@@ -363,6 +362,7 @@ def calc_position(last_close, atr):
     return stop_loss, actual_risk, lots
 
 def render_analysis(symbol: str, market: str, df, company_name: str):
+    lot_size = 1000 if symbol.endswith(".TW") else 1
     df = resample_ohlcv(df, timeframe)
     fi_ema = calc_fi_ema(df, fi_period)
     atr_series = calc_atr(df, atr_period)
@@ -373,7 +373,7 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     last_atr = float(atr_series.iloc[-1])
     lookback = min(3, len(fi_ema) - 1)
     fi_slope = float(fi_ema.iloc[-1] - fi_ema.iloc[-1 - lookback]) if lookback > 0 else 0.0
-    stop_loss, actual_risk, lots = calc_position(last_close, last_atr)
+    stop_loss, actual_risk, lots = calc_position(last_close, last_atr, lot_size)
 
     momentum = ("🟢 多頭動能" if last_fi > 0 and fi_slope > 0
                 else "🔴 空頭動能" if last_fi < 0 and fi_slope < 0
