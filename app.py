@@ -183,6 +183,7 @@ with st.sidebar:
 
     st.divider()
     st.subheader("📊 圖表指標")
+    timeframe = st.radio("K線週期", ["日線", "週線", "月線"], index=0, horizontal=True)
     show_ma = st.multiselect("均線", [5, 20, 60], default=[5, 20, 60])
     show_bb = st.checkbox("布林通道（20,2）", value=True)
 
@@ -342,6 +343,16 @@ def calc_bollinger(close, period=20, std=2):
     sigma = close.rolling(period).std()
     return ma + std * sigma, ma, ma - std * sigma
 
+def resample_ohlcv(df, timeframe: str):
+    if timeframe == "日線":
+        return df
+    freq = "W-FRI" if timeframe == "週線" else "ME"
+    agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+    try:
+        return df.resample(freq).agg(agg).dropna()
+    except ValueError:
+        return df.resample("M").agg(agg).dropna()
+
 def calc_position(last_close, atr):
     stop_dist = atr * atr_mult
     stop_loss = last_close - stop_dist
@@ -350,6 +361,7 @@ def calc_position(last_close, atr):
     return stop_loss, lots * lot_size * stop_dist, lots
 
 def render_analysis(symbol: str, market: str, df, company_name: str):
+    df = resample_ohlcv(df, timeframe)
     fi_ema = calc_fi_ema(df, fi_period)
     atr_series = calc_atr(df, atr_period)
     divergence = detect_divergence(df["Close"], fi_ema)
