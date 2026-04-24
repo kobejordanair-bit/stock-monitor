@@ -648,8 +648,10 @@ with tab_search:
         symbol, market = parse_symbol(raw_input)
         with st.spinner(f"正在抓取 {symbol} 資料..."):
             df = fetch_data(symbol, data_period)
-        if df is None or len(df) < 30:
-            st.error(f"❌ 找不到 **{symbol}** 的資料，請確認代號是否正確。")
+        if df is None:
+            st.error(f"❌ 無法取得 **{symbol}** 的資料，請確認代號是否正確，或稍後再試。")
+        elif len(df) < 20:
+            st.error(f"❌ **{symbol}** 的資料筆數不足（{len(df)} 筆），請選擇更長的資料範圍（建議 3 個月以上）。")
         else:
             company_name = get_company_name(symbol)
             st.session_state.symbol = symbol
@@ -665,7 +667,7 @@ with tab_search:
 
     if st.session_state.symbol:
         df = fetch_data(st.session_state.symbol, data_period)
-        if df is not None and len(df) >= 30:
+        if df is not None and len(df) >= 20:
             render_analysis(st.session_state.symbol, st.session_state.market, df, st.session_state.company)
 
 with tab_watchlist:
@@ -683,7 +685,7 @@ with tab_watchlist:
                 mkt = "台股" if sym.endswith(".TW") else "美股"
                 with st.spinner(f"抓取 {sym}..."):
                     df = fetch_data(sym, data_period)
-                sig = quick_signal(df) if df is not None and len(df) >= 30 else "❓ 資料不足"
+                sig = quick_signal(df) if df is not None and len(df) >= 20 else "❓ 資料不足"
                 results.append({"symbol": sym, "name": row["name"], "market": mkt, "signal": sig, "df": df})
 
             st.subheader("📋 掃描摘要")
