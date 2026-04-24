@@ -257,44 +257,50 @@ def parse_symbol(raw: str) -> tuple[str, str]:
         return f"{raw}.TW", "台股"
     return raw, "美股"
 
+def _fetch_tw_twstock(code: str, period: str):
+    import twstock
+    from datetime import date
+    months = {"1mo": 1, "3mo": 3, "6mo": 6, "1y": 12}.get(period, 6)
+    today = date.today()
+    year, month = today.year, today.month - months
+    if month <= 0:
+        year -= 1
+        month += 12
+    stock = twstock.Stock(code)
+    stock.fetch_from(year, month)
+    if not stock.date:
+        return None
+    df = pd.DataFrame({
+        "Open": stock.open, "High": stock.high,
+        "Low": stock.low, "Close": stock.price, "Volume": stock.capacity,
+    }, index=pd.to_datetime(stock.date))
+    df.index = pd.to_datetime(df.index.date)
+    return df.dropna()
+
+def _fetch_yfinance(symbol: str, period: str):
+    ticker = yf.Ticker(symbol)
+    df = ticker.history(period=period, auto_adjust=True)
+    if df.empty:
+        return None
+    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+    df.index = pd.to_datetime(df.index.date)
+    return df
+
 @st.cache_data(ttl=300)
 def fetch_data(symbol: str, period: str):
     try:
-        # 台股用 twstock
         if symbol.endswith(".TW"):
-            import twstock
             code = symbol.replace(".TW", "")
-            stock = twstock.Stock(code)
-            # 依 period 決定抓幾個月
-            months = {"1mo": 1, "3mo": 3, "6mo": 6, "1y": 12}.get(period, 6)
-            from datetime import date
-            today = date.today()
-            year = today.year
-            month = today.month - months
-            if month <= 0:
-                year -= 1
-                month += 12
-            stock.fetch_from(year, month)
-            if not stock.date:
-                return None
-            df = pd.DataFrame({
-                "Open": stock.open,
-                "High": stock.high,
-                "Low": stock.low,
-                "Close": stock.price,
-                "Volume": stock.capacity,
-            }, index=pd.to_datetime(stock.date))
-            df.index = pd.to_datetime(df.index.date)
-            return df.dropna()
-        # 美股用 yfinance Ticker.history（單一股票更穩定，無 MultiIndex 問題）
+            try:
+                df = _fetch_tw_twstock(code, period)
+                if df is not None and len(df) > 0:
+                    return df
+            except Exception as e:
+                print(f"twstock failed for {symbol}, falling back to yfinance: {e}")
+            # twstock 失敗時改用 yfinance（同樣支援 .TW 後綴）
+            return _fetch_yfinance(symbol, period)
         else:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period=period, auto_adjust=True)
-            if df.empty:
-                return None
-            df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
-            df.index = pd.to_datetime(df.index.date)
-            return df
+            return _fetch_yfinance(symbol, period)
     except Exception as e:
         print(f"fetch_data error ({symbol}): {e}")
         return None
