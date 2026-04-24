@@ -296,7 +296,8 @@ def fetch_data(symbol: str, period: str):
             df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
             df.index = pd.to_datetime(df.index.date)
             return df
-    except Exception:
+    except Exception as e:
+        st.error(f"fetch_data 錯誤（{symbol}）：{e}")
         return None
 @st.cache_data(ttl=86400)
 def get_company_name(symbol: str) -> str:
