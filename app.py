@@ -8,6 +8,12 @@ import requests as req
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+
+# yfinance 需要帶 User-Agent 否則 Yahoo Finance 會擋請求
+_yf_session = req.Session()
+_yf_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+})
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -288,7 +294,7 @@ def fetch_data(symbol: str, period: str):
             return df.dropna()
         # 美股用 yfinance Ticker.history（單一股票更穩定，無 MultiIndex 問題）
         else:
-            ticker = yf.Ticker(symbol)
+            ticker = yf.Ticker(symbol, session=_yf_session)
             df = ticker.history(period=period, auto_adjust=True)
             if df.empty:
                 return None
@@ -305,7 +311,7 @@ def get_company_name(symbol: str) -> str:
             import twstock
             code = symbol.replace(".TW", "")
             return twstock.codes[code].name if code in twstock.codes else symbol
-        return yf.Ticker(symbol).info.get("shortName", symbol)
+        return yf.Ticker(symbol, session=_yf_session).info.get("shortName", symbol)
     except:
         return symbol
 
@@ -315,6 +321,7 @@ def get_fundamentals(symbol: str) -> dict:
         return {}
     try:
         info = yf.Ticker(symbol).info
+        info = yf.Ticker(symbol, session=_yf_session).info
         result = {}
         if info.get("trailingPE"):
             result["本益比 P/E"] = f"{info['trailingPE']:.1f}"
@@ -333,13 +340,11 @@ def get_fundamentals(symbol: str) -> dict:
 
 @st.cache_data(ttl=300)
 def fetch_benchmark(market: str, period: str):
-    ticker = "^TWII" if market == "台股" else "^GSPC"
+    bench_symbol = "^TWII" if market == "台股" else "^GSPC"
     try:
-        df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
+        df = yf.Ticker(bench_symbol, session=_yf_session).history(period=period, auto_adjust=True)
         if df.empty:
             return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
         return df[["Close"]].dropna()
     except Exception:
         return None
