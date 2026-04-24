@@ -599,7 +599,7 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
 
     fig.update_layout(height=900, showlegend=True, xaxis_rangeslider_visible=False,
                       plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
-                      hovermode="x unified",
+                      hovermode="x",
                       legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
                                   font=dict(size=11), bgcolor="rgba(0,0,0,0)"))
     fig.update_xaxes(gridcolor="#2a2a2a",
