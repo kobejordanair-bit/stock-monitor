@@ -22,8 +22,9 @@ def _get_secret(key: str) -> str:
     except Exception:
         return os.environ.get(key, "").strip()
 
-SUPABASE_URL = _get_secret("SUPABASE_URL")
+SUPABASE_URL = _get_secret("SUPABASE_URL").rstrip("/")
 SUPABASE_KEY = _get_secret("SUPABASE_KEY")
+LINE_NOTIFY_TOKEN = _get_secret("LINE_NOTIFY_TOKEN")
 
 def _headers() -> dict:
     return {
@@ -40,8 +41,13 @@ def db_select(table: str, order_col: str = None, desc: bool = True, limit: int =
         if order_col:
             params["order"] = f"{order_col}.{'desc' if desc else 'asc'}"
         r = req.get(f"{SUPABASE_URL}/rest/v1/{table}", headers=_headers(), params=params, timeout=5)
-        return r.json() if r.ok else []
-    except Exception:
+        if not r.ok:
+            st.sidebar.warning(f"⚠️ DB 讀取失敗（{table}）：{r.status_code}")
+            return []
+        data = r.json()
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ DB 連線錯誤：{e}")
         return []
 
 def db_insert(table: str, data: dict) -> bool:
@@ -64,16 +70,27 @@ def db_delete(table: str, row_id: int) -> bool:
     except Exception:
         return False
 
+def send_line_notify(message: str) -> bool:
+    if not LINE_NOTIFY_TOKEN:
+        return False
+    try:
+        r = req.post("https://notify-api.line.me/api/notify",
+                     headers={"Authorization": f"Bearer {LINE_NOTIFY_TOKEN}"},
+                     data={"message": message}, timeout=5)
+        return r.ok
+    except Exception:
+        return False
+
 # ─────────────────────────────────────────────
 #  頁面設定
 # ─────────────────────────────────────────────
 
 st.set_page_config(page_title="股票動能分析系統", page_icon="📡", layout="wide")
 # session_state 初始化
-if "symbol" not in st.session_state:
-    st.session_state.symbol = None
-    st.session_state.market = None
-    st.session_state.company = None
+st.session_state.setdefault("symbol", None)
+st.session_state.setdefault("market", None)
+st.session_state.setdefault("company", None)
+st.session_state.setdefault("notified_alerts", set())
 
 
 # 手機版 CSS 優化
@@ -164,7 +181,20 @@ ATR 衡量股票真實波動幅度。停損 = 收盤價 - ATR × 倍數。
 - **總本金**：你的實際投入資金
 - **單筆最大虧損**：建議設 2%，即每筆交易最多虧本金的 2%
 - **ATR 停損倍數**：建議 2.5，波動劇烈時可調高到 3
-- **每張股數**：台股選 1000，美股選 1
+- **每張股數**：系統自動判斷，台股 1000 股/張，美股 1 股
+
+---
+
+### 📊 圖表指標設定
+- **K線週期**：日線／週線／月線切換，所有指標同步重新計算
+- **均線**：MA5（黃）、MA20（藍）、MA60（紅），可自由勾選
+- **布林通道**：20日均線 ± 2倍標準差，顯示價格正常波動區間
+
+---
+
+### 🔔 LINE 推播通知
+在 `secrets.toml` 加入 `LINE_NOTIFY_TOKEN`，切換到「價格警示」Tab 時，若有警示觸發會自動推播到 LINE。
+前往 [LINE Notify](https://notify-bot.line.me/) 申請個人 Token。
     """)
 # ─────────────────────────────────────────────
 #  側邊欄
@@ -173,13 +203,19 @@ ATR 衡量股票真實波動幅度。停損 = 收盤價 - ATR × 倍數。
 with st.sidebar:
     st.header("⚙️ 參數設定")
     capital = st.number_input("總本金（元）", min_value=100_000, max_value=100_000_000, value=1_000_000, step=100_000, format="%d")
-    risk_pct = st.slider("單筆最大虧損（佔本金 %）", 0.5, 5.0, 2.0, 0.5) / 100
+    risk_pct = st.slider("單筆最大虧損（佔本金 %）", 0.5, 20.0, 2.0, 0.5) / 100
     atr_mult = st.slider("ATR 停損倍數", 1.0, 4.0, 2.5, 0.5)
     fi_period = st.selectbox("Force Index EMA 週期", [2, 13, 26], index=1)
     atr_period = st.selectbox("ATR 週期", [7, 14, 21], index=1)
     period_map = {"1 個月": "1mo", "3 個月": "3mo", "6 個月": "6mo", "1 年": "1y"}
     data_period = period_map[st.selectbox("K線資料範圍", list(period_map.keys()), index=2)]
-    lot_size = st.radio("每張股數", [1000, 1], index=0, help="台股選 1000；美股選 1")
+
+    st.divider()
+    st.subheader("📊 圖表指標")
+    timeframe = st.radio("K線週期", ["日線", "週線", "月線"], index=0, horizontal=True)
+    show_ma = st.multiselect("均線", [5, 20, 60], default=[20])
+    show_bb = st.checkbox("布林通道（20,2）", value=True)
+    show_benchmark = st.checkbox("對比大盤（台股加權 / S&P 500）", value=False)
 
     st.divider()
     st.subheader("⭐ 自選清單")
@@ -215,6 +251,8 @@ with st.sidebar:
 
 def parse_symbol(raw: str) -> tuple[str, str]:
     raw = raw.strip().upper()
+    if raw.endswith(".TW"):
+        return raw, "台股"
     if raw.isdigit():
         return f"{raw}.TW", "台股"
     return raw, "美股"
@@ -248,23 +286,62 @@ def fetch_data(symbol: str, period: str):
             }, index=pd.to_datetime(stock.date))
             df.index = pd.to_datetime(df.index.date)
             return df.dropna()
-        # 美股用 yfinance
+        # 美股用 yfinance Ticker.history（單一股票更穩定，無 MultiIndex 問題）
         else:
-            df = yf.download(symbol, period=period, auto_adjust=True, progress=False)
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=period, auto_adjust=True)
             if df.empty:
                 return None
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
             df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
             df.index = pd.to_datetime(df.index.date)
             return df
-    except Exception:
+    except Exception as e:
+        print(f"fetch_data error ({symbol}): {e}")
         return None
+@st.cache_data(ttl=86400)
 def get_company_name(symbol: str) -> str:
     try:
+        if symbol.endswith(".TW"):
+            import twstock
+            code = symbol.replace(".TW", "")
+            return twstock.codes[code].name if code in twstock.codes else symbol
         return yf.Ticker(symbol).info.get("shortName", symbol)
     except:
         return symbol
+
+@st.cache_data(ttl=3600)
+def get_fundamentals(symbol: str) -> dict:
+    if symbol.endswith(".TW"):
+        return {}
+    try:
+        info = yf.Ticker(symbol).info
+        info = yf.Ticker(symbol).info
+        result = {}
+        if info.get("trailingPE"):
+            result["本益比 P/E"] = f"{info['trailingPE']:.1f}"
+        if info.get("marketCap"):
+            cap = info["marketCap"]
+            result["市值"] = f"${cap/1e9:.1f}B" if cap >= 1e9 else f"${cap/1e6:.0f}M"
+        if info.get("dividendYield"):
+            result["殖利率"] = f"{info['dividendYield']*100:.2f}%"
+        if info.get("fiftyTwoWeekHigh") and info.get("fiftyTwoWeekLow"):
+            result["52週區間"] = f"{info['fiftyTwoWeekLow']:.2f} ～ {info['fiftyTwoWeekHigh']:.2f}"
+        if info.get("trailingEps"):
+            result["EPS"] = f"{info['trailingEps']:.2f}"
+        return result
+    except Exception:
+        return {}
+
+@st.cache_data(ttl=300)
+def fetch_benchmark(market: str, period: str):
+    bench_symbol = "^TWII" if market == "台股" else "^GSPC"
+    try:
+        df = yf.Ticker(bench_symbol).history(period=period, auto_adjust=True)
+        if df.empty:
+            return None
+        return df[["Close"]].dropna()
+    except Exception:
+        return None
 
 def calc_fi_ema(df, period):
     return (df["Volume"] * df["Close"].diff()).ewm(span=period, adjust=False).mean()
@@ -324,14 +401,52 @@ def get_composite_signal(fi_momentum: str, rsi: float, macd_line: float, signal_
     else:
         return "⚪ 訊號不明", f"指標分歧，建議觀望｜RSI {rsi:.1f}"
 
-def calc_position(last_close, atr):
+def calc_ma(close, periods):
+    return {p: close.rolling(p).mean() for p in periods}
+
+def calc_bollinger(close, period=20, std=2):
+    ma = close.rolling(period).mean()
+    sigma = close.rolling(period).std()
+    return ma + std * sigma, ma, ma - std * sigma
+
+def resample_ohlcv(df, timeframe: str):
+    if timeframe == "日線":
+        return df
+    freq = "W-FRI" if timeframe == "週線" else "ME"
+    agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+    try:
+        return df.resample(freq).agg(agg).dropna()
+    except ValueError:
+        return df.resample("M").agg(agg).dropna()
+
+def quick_signal(df) -> str:
+    try:
+        df_r = resample_ohlcv(df, timeframe)
+        fi_ema = calc_fi_ema(df_r, fi_period)
+        lookback = min(3, len(fi_ema) - 1)
+        fi_slope = float(fi_ema.iloc[-1] - fi_ema.iloc[-1 - lookback]) if lookback > 0 else 0.0
+        last_fi = float(fi_ema.iloc[-1])
+        momentum = ("🟢 多頭動能" if last_fi > 0 and fi_slope > 0
+                    else "🔴 空頭動能" if last_fi < 0 and fi_slope < 0
+                    else "🟡 中性觀望")
+        rsi_s = calc_rsi(df_r["Close"])
+        macd_l, sig_l, _ = calc_macd(df_r["Close"])
+        signal, _ = get_composite_signal(momentum, float(rsi_s.iloc[-1]), float(macd_l.iloc[-1]), float(sig_l.iloc[-1]))
+        return signal
+    except Exception:
+        return "❓ 計算失敗"
+
+def calc_position(last_close, atr, lot_size):
     stop_dist = atr * atr_mult
     stop_loss = last_close - stop_dist
     shares = (capital * risk_pct) / stop_dist if stop_dist > 0 else 0
-    lots = max(1, int(shares // lot_size))
-    return stop_loss, lots * lot_size * stop_dist, lots
+    lots = int(shares // lot_size)
+    actual_risk = lots * lot_size * stop_dist
+    return stop_loss, actual_risk, lots
 
 def render_analysis(symbol: str, market: str, df, company_name: str):
+    lot_size = 1000 if symbol.endswith(".TW") else 1
+    df = resample_ohlcv(df, timeframe)
     fi_ema = calc_fi_ema(df, fi_period)
     atr_series = calc_atr(df, atr_period)
     divergence = detect_divergence(df["Close"], fi_ema)
@@ -339,8 +454,9 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     last_close = float(df["Close"].iloc[-1])
     last_fi = float(fi_ema.iloc[-1])
     last_atr = float(atr_series.iloc[-1])
-    fi_slope = float(fi_ema.iloc[-1] - fi_ema.iloc[-3])
-    stop_loss, actual_risk, lots = calc_position(last_close, last_atr)
+    lookback = min(3, len(fi_ema) - 1)
+    fi_slope = float(fi_ema.iloc[-1] - fi_ema.iloc[-1 - lookback]) if lookback > 0 else 0.0
+    stop_loss, actual_risk, lots = calc_position(last_close, last_atr, lot_size)
 
     momentum = ("🟢 多頭動能" if last_fi > 0 and fi_slope > 0
                 else "🔴 空頭動能" if last_fi < 0 and fi_slope < 0
@@ -375,7 +491,7 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     c2.metric("ATR（波動度）", f"{last_atr:.2f}")
     c3, c4 = st.columns(2)
     c3.metric("建議停損", f"{stop_loss:.2f}", delta=f"-{last_atr*atr_mult:.2f}", delta_color="inverse")
-    c4.metric(f"建議部位（{'張' if lot_size==1000 else '股'}）", f"{lots}")
+    c4.metric(f"建議部位（{'張' if lot_size==1000 else '股'}）", f"{lots}" if lots > 0 else "⚠️ 0")
 
     # 綜合訊號（最醒目放最上面）
     if "強力買進" in composite_signal:
@@ -400,15 +516,31 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
 
     if "背離" in divergence and "無" not in divergence:
         st.warning(f"**FI 背離訊號**：{divergence}")
-    st.info(f"**最大風險**：{actual_risk:,.0f} 元（本金 {risk_pct*100:.0f}%）")
+
+    budget = capital * risk_pct
+    if lots == 0:
+        st.error(f"⚠️ 波動過大：依目前風險設定（{risk_pct*100:.0f}% = {budget:,.0f} 元）不足以建倉一張，建議降低 ATR 倍數或提高風險比例。")
+    else:
+        risk_label = f"{actual_risk/capital*100:.1f}%"
+        st.info(f"**風險預算**：{budget:,.0f} 元（{risk_pct*100:.0f}%）｜**實際風險**：{actual_risk:,.0f} 元（{risk_label}）")
+
+    fundamentals = get_fundamentals(symbol)
+    if fundamentals:
+        with st.expander("📋 基本面資料（美股）"):
+            cols = st.columns(len(fundamentals))
+            for i, (k, v) in enumerate(fundamentals.items()):
+                cols[i].metric(k, v)
 
     with st.expander("🔔 設定價格警示"):
         col_p, col_dir, col_btn = st.columns([2, 2, 1])
         target_price = col_p.number_input("目標價", value=float(round(last_close*0.95, 1)), key=f"tp_{symbol}")
         direction = col_dir.selectbox("條件", ["跌破此價格", "突破此價格"], key=f"dir_{symbol}")
         if col_btn.button("設定", key=f"alert_{symbol}"):
-            db_insert("alerts", {"symbol": symbol, "name": company_name, "target_price": target_price, "direction": direction})
-            st.toast(f"警示已設定：{symbol} {direction} {target_price}")
+            ok = db_insert("alerts", {"symbol": symbol, "name": company_name, "target_price": target_price, "direction": direction})
+            if ok:
+                st.toast(f"警示已設定：{symbol} {direction} {target_price}")
+            else:
+                st.error("設定失敗，請確認資料庫連線")
 
     fig = make_subplots(rows=5, cols=1, shared_xaxes=True,
                         row_heights=[0.40, 0.15, 0.15, 0.15, 0.15],
@@ -420,6 +552,26 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
                                   name="K線", increasing_line_color="#ef5350", decreasing_line_color="#26a69a"), row=1, col=1)
     fig.add_hline(y=stop_loss, line_dash="dash", line_color="orange", line_width=1.5,
                   annotation_text=f"停損 {stop_loss:.2f}", annotation_position="right", row=1, col=1)
+
+    # 均線
+    ma_colors = {5: "#ffd54f", 20: "#42a5f5", 60: "#ef5350"}
+    if show_ma:
+        ma_data = calc_ma(df["Close"], show_ma)
+        for p in show_ma:
+            fig.add_trace(go.Scatter(x=ma_data[p].index, y=ma_data[p].values,
+                                     line=dict(color=ma_colors.get(p, "#ffffff"), width=1.2),
+                                     name=f"MA{p}"), row=1, col=1)
+
+    # 布林通道
+    if show_bb:
+        bb_upper, bb_mid, bb_lower = calc_bollinger(df["Close"])
+        fig.add_trace(go.Scatter(x=bb_upper.index, y=bb_upper.values,
+                                  line=dict(color="rgba(100,181,246,0.6)", width=1),
+                                  name="布林通道", legendgroup="BB", showlegend=True), row=1, col=1)
+        fig.add_trace(go.Scatter(x=bb_lower.index, y=bb_lower.values,
+                                  fill="tonexty", fillcolor="rgba(100,181,246,0.06)",
+                                  line=dict(color="rgba(100,181,246,0.6)", width=1),
+                                  name="BB下軌", legendgroup="BB", showlegend=False), row=1, col=1)
 
     # Force Index EMA
     fi_colors = ["#ef5350" if v >= 0 else "#26a69a" for v in fi_ema]
@@ -441,12 +593,44 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     # 成交量
     vol_colors = ["#ef5350" if df["Close"].iloc[i] >= df["Open"].iloc[i] else "#26a69a" for i in range(len(df))]
     fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=vol_colors, name="成交量"), row=5, col=1)
+    vol_ma = df["Volume"].rolling(20).mean()
+    fig.add_trace(go.Scatter(x=vol_ma.index, y=vol_ma.values,
+                              line=dict(color="#ffd54f", width=1.2), name="Vol MA20"), row=5, col=1)
 
-    fig.update_layout(height=900, showlegend=False, xaxis_rangeslider_visible=False,
-                      plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa")
-    fig.update_xaxes(gridcolor="#2a2a2a")
+    fig.update_layout(height=900, showlegend=True, xaxis_rangeslider_visible=False,
+                      plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
+                      hovermode="x unified",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
+                                  font=dict(size=11), bgcolor="rgba(0,0,0,0)"))
+    fig.update_xaxes(gridcolor="#2a2a2a",
+                     showspikes=True, spikemode="across+toaxis", spikesnap="cursor",
+                     spikecolor="rgba(255,255,255,0.25)", spikethickness=1, spikedash="solid")
     fig.update_yaxes(gridcolor="#2a2a2a")
     st.plotly_chart(fig, use_container_width=True)
+
+    if show_benchmark:
+        bench_df = fetch_benchmark(market, data_period)
+        if bench_df is not None:
+            common_idx = df.index.intersection(bench_df.index)
+            if len(common_idx) > 5:
+                s_norm = df["Close"].loc[common_idx] / df["Close"].loc[common_idx].iloc[0] * 100
+                b_norm = bench_df["Close"].loc[common_idx] / bench_df["Close"].loc[common_idx].iloc[0] * 100
+                bench_name = "台股加權指數" if market == "台股" else "S&P 500"
+                bfig = go.Figure()
+                bfig.add_trace(go.Scatter(x=s_norm.index, y=s_norm.values, name=symbol,
+                                           line=dict(color="#ef5350", width=2)))
+                bfig.add_trace(go.Scatter(x=b_norm.index, y=b_norm.values, name=bench_name,
+                                           line=dict(color="#42a5f5", width=2)))
+                bfig.add_hline(y=100, line_dash="dot", line_color="gray", line_width=1)
+                bfig.update_layout(
+                    title=f"與大盤相對表現（起始基準 = 100）",
+                    height=260, margin=dict(t=40, b=20),
+                    plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
+                    hovermode="x", legend=dict(orientation="h")
+                )
+                bfig.update_xaxes(gridcolor="#2a2a2a")
+                bfig.update_yaxes(gridcolor="#2a2a2a")
+                st.plotly_chart(bfig, use_container_width=True)
 
 # ─────────────────────────────────────────────
 #  主畫面 Tab
@@ -463,8 +647,20 @@ with tab_search:
         symbol, market = parse_symbol(raw_input)
         with st.spinner(f"正在抓取 {symbol} 資料..."):
             df = fetch_data(symbol, data_period)
-        if df is None or len(df) < 30:
-            st.error(f"❌ 找不到 **{symbol}** 的資料，請確認代號是否正確。")
+        if df is None:
+            if not symbol.endswith(".TW"):
+                try:
+                    test = yf.Ticker(symbol).history(period="5d")
+                    if test.empty:
+                        st.error(f"❌ yfinance 回傳空資料（{symbol}），可能是代號錯誤或 Yahoo Finance 暫時無法存取。")
+                    else:
+                        st.error(f"❌ 快取問題，請等 5 分鐘後再試（快取 TTL 300 秒）。")
+                except Exception as e:
+                    st.error(f"❌ yfinance 錯誤：{e}")
+            else:
+                st.error(f"❌ 無法取得 **{symbol}** 的資料，請確認代號是否正確，或稍後再試。")
+        elif len(df) < 20:
+            st.error(f"❌ **{symbol}** 的資料筆數不足（{len(df)} 筆），請選擇更長的資料範圍（建議 3 個月以上）。")
         else:
             company_name = get_company_name(symbol)
             st.session_state.symbol = symbol
@@ -480,29 +676,49 @@ with tab_search:
 
     if st.session_state.symbol:
         df = fetch_data(st.session_state.symbol, data_period)
-        if df is not None and len(df) >= 30:
+        if df is not None and len(df) >= 20:
             render_analysis(st.session_state.symbol, st.session_state.market, df, st.session_state.company)
 
 with tab_watchlist:
     if not watchlist_rows:
         st.info("自選清單是空的，先查詢股票後點「⭐ 加入自選」。")
     else:
-        if st.button("🔄 一鍵掃描所有自選股", type="primary"):
+        col_scan, col_filter = st.columns([2, 2])
+        scan_btn = col_scan.button("🔄 一鍵掃描所有自選股", type="primary")
+        strong_only = col_filter.checkbox("只顯示強訊號", value=False)
+
+        if scan_btn:
+            results = []
             for row in watchlist_rows:
                 sym = row["symbol"]
                 mkt = "台股" if sym.endswith(".TW") else "美股"
-                with st.spinner(f"分析 {sym}..."):
+                with st.spinner(f"抓取 {sym}..."):
                     df = fetch_data(sym, data_period)
-                if df is not None and len(df) >= 30:
-                    render_analysis(sym, mkt, df, row["name"])
+                sig = quick_signal(df) if df is not None and len(df) >= 20 else "❓ 資料不足"
+                results.append({"symbol": sym, "name": row["name"], "market": mkt, "signal": sig, "df": df})
+
+            st.subheader("📋 掃描摘要")
+            summary_df = pd.DataFrame([{"代號": r["symbol"], "名稱": r["name"], "綜合訊號": r["signal"]} for r in results])
+            st.dataframe(summary_df, hide_index=True, use_container_width=True)
+            st.divider()
+
+            for r in results:
+                if strong_only and "強力" not in r["signal"]:
+                    continue
+                if r["df"] is not None and len(r["df"]) >= 30:
+                    render_analysis(r["symbol"], r["market"], r["df"], r["name"])
                 else:
-                    st.warning(f"{sym} 資料抓取失敗，跳過")
+                    st.warning(f"{r['symbol']} 資料抓取失敗，跳過")
 
 with tab_alerts:
     alert_rows = db_select("alerts", order_col="created_at", desc=True)
     if not alert_rows:
         st.info("尚無警示，可在查詢結果頁面展開「設定價格警示」新增。")
     else:
+        if LINE_NOTIFY_TOKEN:
+            st.caption("🔔 LINE 通知已啟用，價格觸發時自動推播（同一 session 每個警示只通知一次）")
+        else:
+            st.caption("💡 在 secrets.toml 加入 LINE_NOTIFY_TOKEN 可啟用 LINE 推播")
         st.write(f"共 {len(alert_rows)} 個警示：")
         for row in alert_rows:
             df_check = fetch_data(row["symbol"], "5d")
@@ -517,6 +733,13 @@ with tab_alerts:
                                      (row["direction"] == "突破此價格" and current_price > row["target_price"]))
                         if triggered:
                             st.error(f"🚨 已{row['direction']}！")
+                            if row["id"] not in st.session_state.notified_alerts:
+                                msg = (f"\n🚨 股票警示觸發\n"
+                                       f"{row['symbol']} {row['name']}\n"
+                                       f"條件：{row['direction']} {row['target_price']}\n"
+                                       f"現價：{current_price:.2f}")
+                                if send_line_notify(msg):
+                                    st.session_state.notified_alerts.add(row["id"])
                         else:
                             st.success(f"✅ 監控中：{row['direction']}")
                 if col_del.button("🗑️", key=f"del_alert_{row['id']}"):
