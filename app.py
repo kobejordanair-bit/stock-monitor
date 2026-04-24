@@ -188,8 +188,15 @@ ATR 衡量股票真實波動幅度。停損 = 收盤價 - ATR × 倍數。
 with st.sidebar:
     st.header("⚙️ 參數設定")
     capital = st.number_input("總本金（元）", min_value=100_000, max_value=100_000_000, value=1_000_000, step=100_000, format="%d")
-    risk_pct = st.slider("單筆最大虧損（佔本金 %）", 0.5, 20.0, 2.0, 0.5) / 100
-    atr_mult = st.slider("ATR 停損倍數", 1.0, 4.0, 2.5, 0.5)
+
+    style = st.radio("交易風格", ["保守", "平衡", "積極"], index=1, horizontal=True,
+                     help="保守：小倉、寬停損　平衡：標準設定　積極：大倉、緊停損")
+    style_defaults = {"保守": (1.0, 3.0), "平衡": (2.0, 2.5), "積極": (4.0, 1.5)}
+    default_risk, default_atr = style_defaults[style]
+
+    risk_pct = st.slider("單筆最大虧損（佔本金 %）", 0.5, 20.0, default_risk, 0.5) / 100
+    atr_mult = st.slider("ATR 停損倍數", 1.0, 4.0, default_atr, 0.5,
+                         help="倍數越大停損距離越寬，被洗出的機率越低但虧損也越大")
     fi_period = st.selectbox("Force Index EMA 週期", [2, 13, 26], index=1)
     atr_period = st.selectbox("ATR 週期", [7, 14, 21], index=1)
     period_map = {"1 個月": "1mo", "3 個月": "3mo", "6 個月": "6mo", "1 年": "1y"}
@@ -484,26 +491,21 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     c3.metric("建議停損", f"{stop_loss:.2f}", delta=f"-{last_atr*atr_mult:.2f}", delta_color="inverse")
     c4.metric(f"建議部位（{'張' if lot_size==1000 else '股'}）", f"{lots}" if lots > 0 else "⚠️ 0")
 
-    # 綜合訊號（最醒目放最上面）
-    if "強力買進" in composite_signal:
-        st.success(f"### {composite_signal}")
-        st.caption(composite_note)
-    elif "強力賣出" in composite_signal:
-        st.error(f"### {composite_signal}")
-        st.caption(composite_note)
-    else:
-        st.warning(f"### {composite_signal}")
-        st.caption(composite_note)
+    # 綜合訊號卡片
+    rsi_status = "🔴 超買（>70）" if last_rsi > 70 else "🟢 超賣（<30）" if last_rsi < 30 else f"🟡 {last_rsi:.1f}（正常區間）"
+    macd_status = "🟢 金叉（多頭）" if last_macd > last_signal else "🔴 死叉（空頭）"
+    fi_icon = "🟢" if "多頭" in momentum else "🔴" if "空頭" in momentum else "🟡"
 
-    # 三指標個別狀態
-    col_fi, col_rsi, col_macd = st.columns(3)
-    col_fi.info(f"**FI 動能**：{momentum}")
+    signal_render = st.success if "強力買進" in composite_signal else st.error if "強力賣出" in composite_signal else st.warning
+    signal_render(f"""
+**{composite_signal}**　　{composite_note}
 
-    rsi_status = "🔴 超買" if last_rsi > 70 else "🟢 超賣" if last_rsi < 30 else "🟡 中性"
-    col_rsi.info(f"**RSI（14）**：{last_rsi:.1f}　{rsi_status}")
-
-    macd_status = "🟢 金叉" if last_macd > last_signal else "🔴 死叉"
-    col_macd.info(f"**MACD**：{macd_status}　差距 {last_macd - last_signal:.2f}")
+| 指標 | 狀態 | 解讀 |
+|------|------|------|
+| FI EMA（力道） | {fi_icon} {momentum} | 大資金流向，由負轉正為進場訊號 |
+| RSI（14） | {rsi_status} | 超買接近賣壓區，超賣接近反彈區 |
+| MACD | {macd_status} | 快線穿越慢線方向代表短期趨勢 |
+""")
 
     if "背離" in divergence and "無" not in divergence:
         st.warning(f"**FI 背離訊號**：{divergence}")
@@ -598,6 +600,24 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
                      spikecolor="rgba(255,255,255,0.25)", spikethickness=1, spikedash="solid")
     fig.update_yaxes(gridcolor="#2a2a2a")
     st.plotly_chart(fig, use_container_width=True)
+    with st.expander("📖 圖表指標解讀"):
+        st.markdown("""
+**FI EMA（力道指數）**　→　第二個圖（紅/綠柱）
+- 柱子在 **零軸以上（紅）**：買方力道強，多頭主導
+- 柱子在 **零軸以下（綠）**：賣方力道強，空頭主導
+- **由負轉正**：大資金開始進場，潛在買進訊號
+- **頂背離**：股價創新高但 FI EMA 沒跟上 → 可能假突破，注意出場
+
+**RSI（14）**　→　第三個圖
+- **> 70**：超買區，短期漲多，可能面臨回調
+- **< 30**：超賣區，短期跌多，可能出現反彈
+- **50 附近**：趨勢中性
+
+**MACD**　→　第四個圖
+- **MACD 線穿越 Signal 線往上（金叉）**：短期動能轉多
+- **MACD 線穿越 Signal 線往下（死叉）**：短期動能轉空
+- **柱狀圖縮短**：目前趨勢力道在減弱
+        """)
 
     if show_benchmark:
         bench_df = fetch_benchmark(market, data_period)
