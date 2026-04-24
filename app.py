@@ -561,18 +561,18 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
         for p in show_ma:
             fig.add_trace(go.Scatter(x=ma_data[p].index, y=ma_data[p].values,
                                      line=dict(color=ma_colors.get(p, "#ffffff"), width=1.2),
-                                     name=f"MA{p}", hoverinfo="skip"), row=1, col=1)
+                                     name=f"MA{p}"), row=1, col=1)
 
     # 布林通道
     if show_bb:
         bb_upper, bb_mid, bb_lower = calc_bollinger(df["Close"])
         fig.add_trace(go.Scatter(x=bb_upper.index, y=bb_upper.values,
                                   line=dict(color="rgba(100,181,246,0.6)", width=1),
-                                  name="BB上軌", showlegend=False, hoverinfo="skip"), row=1, col=1)
+                                  name="布林通道", legendgroup="BB", showlegend=True), row=1, col=1)
         fig.add_trace(go.Scatter(x=bb_lower.index, y=bb_lower.values,
                                   fill="tonexty", fillcolor="rgba(100,181,246,0.06)",
                                   line=dict(color="rgba(100,181,246,0.6)", width=1),
-                                  name="BB下軌", showlegend=False, hoverinfo="skip"), row=1, col=1)
+                                  name="BB下軌", legendgroup="BB", showlegend=False), row=1, col=1)
 
     # Force Index EMA
     fi_colors = ["#ef5350" if v >= 0 else "#26a69a" for v in fi_ema]
@@ -596,8 +596,7 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
     fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=vol_colors, name="成交量"), row=5, col=1)
     vol_ma = df["Volume"].rolling(20).mean()
     fig.add_trace(go.Scatter(x=vol_ma.index, y=vol_ma.values,
-                              line=dict(color="#ffd54f", width=1.2), name="Vol MA20",
-                              hoverinfo="skip"), row=5, col=1)
+                              line=dict(color="#ffd54f", width=1.2), name="Vol MA20"), row=5, col=1)
 
     fig.update_layout(height=900, showlegend=True, xaxis_rangeslider_visible=False,
                       plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
