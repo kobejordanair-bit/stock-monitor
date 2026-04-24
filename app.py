@@ -203,7 +203,7 @@ ATR 衡量股票真實波動幅度。停損 = 收盤價 - ATR × 倍數。
 with st.sidebar:
     st.header("⚙️ 參數設定")
     capital = st.number_input("總本金（元）", min_value=100_000, max_value=100_000_000, value=1_000_000, step=100_000, format="%d")
-    risk_pct = st.slider("單筆最大虧損（佔本金 %）", 0.5, 5.0, 2.0, 0.5) / 100
+    risk_pct = st.slider("單筆最大虧損（佔本金 %）", 0.5, 20.0, 2.0, 0.5) / 100
     atr_mult = st.slider("ATR 停損倍數", 1.0, 4.0, 2.5, 0.5)
     fi_period = st.selectbox("Force Index EMA 週期", [2, 13, 26], index=1)
     atr_period = st.selectbox("ATR 週期", [7, 14, 21], index=1)
