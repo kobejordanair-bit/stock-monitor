@@ -286,18 +286,17 @@ def fetch_data(symbol: str, period: str):
             }, index=pd.to_datetime(stock.date))
             df.index = pd.to_datetime(df.index.date)
             return df.dropna()
-        # 美股用 yfinance
+        # 美股用 yfinance Ticker.history（單一股票更穩定，無 MultiIndex 問題）
         else:
-            df = yf.download(symbol, period=period, auto_adjust=True, progress=False)
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=period, auto_adjust=True)
             if df.empty:
                 return None
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
             df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
             df.index = pd.to_datetime(df.index.date)
             return df
     except Exception as e:
-        st.error(f"fetch_data 錯誤（{symbol}）：{e}")
+        print(f"fetch_data error ({symbol}): {e}")
         return None
 @st.cache_data(ttl=86400)
 def get_company_name(symbol: str) -> str:
