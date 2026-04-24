@@ -24,7 +24,6 @@ def _get_secret(key: str) -> str:
 
 SUPABASE_URL = _get_secret("SUPABASE_URL").rstrip("/")
 SUPABASE_KEY = _get_secret("SUPABASE_KEY")
-LINE_NOTIFY_TOKEN = _get_secret("LINE_NOTIFY_TOKEN")
 
 def _headers() -> dict:
     return {
@@ -70,16 +69,6 @@ def db_delete(table: str, row_id: int) -> bool:
     except Exception:
         return False
 
-def send_line_notify(message: str) -> bool:
-    if not LINE_NOTIFY_TOKEN:
-        return False
-    try:
-        r = req.post("https://notify-api.line.me/api/notify",
-                     headers={"Authorization": f"Bearer {LINE_NOTIFY_TOKEN}"},
-                     data={"message": message}, timeout=5)
-        return r.ok
-    except Exception:
-        return False
 
 # ─────────────────────────────────────────────
 #  頁面設定
@@ -90,7 +79,6 @@ st.set_page_config(page_title="股票動能分析系統", page_icon="📡", layo
 st.session_state.setdefault("symbol", None)
 st.session_state.setdefault("market", None)
 st.session_state.setdefault("company", None)
-st.session_state.setdefault("notified_alerts", set())
 
 
 # 手機版 CSS 優化
@@ -192,9 +180,6 @@ ATR 衡量股票真實波動幅度。停損 = 收盤價 - ATR × 倍數。
 
 ---
 
-### 🔔 LINE 推播通知
-在 `secrets.toml` 加入 `LINE_NOTIFY_TOKEN`，切換到「價格警示」Tab 時，若有警示觸發會自動推播到 LINE。
-前往 [LINE Notify](https://notify-bot.line.me/) 申請個人 Token。
     """)
 # ─────────────────────────────────────────────
 #  側邊欄
@@ -721,10 +706,6 @@ with tab_alerts:
     if not alert_rows:
         st.info("尚無警示，可在查詢結果頁面展開「設定價格警示」新增。")
     else:
-        if LINE_NOTIFY_TOKEN:
-            st.caption("🔔 LINE 通知已啟用，價格觸發時自動推播（同一 session 每個警示只通知一次）")
-        else:
-            st.caption("💡 在 secrets.toml 加入 LINE_NOTIFY_TOKEN 可啟用 LINE 推播")
         st.write(f"共 {len(alert_rows)} 個警示：")
         for row in alert_rows:
             df_check = fetch_data(row["symbol"], "5d")
@@ -739,13 +720,6 @@ with tab_alerts:
                                      (row["direction"] == "突破此價格" and current_price > row["target_price"]))
                         if triggered:
                             st.error(f"🚨 已{row['direction']}！")
-                            if row["id"] not in st.session_state.notified_alerts:
-                                msg = (f"\n🚨 股票警示觸發\n"
-                                       f"{row['symbol']} {row['name']}\n"
-                                       f"條件：{row['direction']} {row['target_price']}\n"
-                                       f"現價：{current_price:.2f}")
-                                if send_line_notify(msg):
-                                    st.session_state.notified_alerts.add(row["id"])
                         else:
                             st.success(f"✅ 監控中：{row['direction']}")
                 if col_del.button("🗑️", key=f"del_alert_{row['id']}"):
