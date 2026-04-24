@@ -654,7 +654,17 @@ with tab_search:
         with st.spinner(f"正在抓取 {symbol} 資料..."):
             df = fetch_data(symbol, data_period)
         if df is None:
-            st.error(f"❌ 無法取得 **{symbol}** 的資料，請確認代號是否正確，或稍後再試。")
+            if not symbol.endswith(".TW"):
+                try:
+                    test = yf.Ticker(symbol, session=_yf_session).history(period="5d")
+                    if test.empty:
+                        st.error(f"❌ yfinance 回傳空資料（{symbol}），可能是代號錯誤或 Yahoo Finance 暫時無法存取。")
+                    else:
+                        st.error(f"❌ 快取問題，請等 5 分鐘後再試（快取 TTL 300 秒）。")
+                except Exception as e:
+                    st.error(f"❌ yfinance 錯誤：{e}")
+            else:
+                st.error(f"❌ 無法取得 **{symbol}** 的資料，請確認代號是否正確，或稍後再試。")
         elif len(df) < 20:
             st.error(f"❌ **{symbol}** 的資料筆數不足（{len(df)} 筆），請選擇更長的資料範圍（建議 3 個月以上）。")
         else:
