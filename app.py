@@ -547,9 +547,29 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
                         vertical_spacing=0.02,
                         subplot_titles=("K線 + 停損線", f"Force Index EMA（{fi_period}）", "RSI（14）", "MACD（12/26/9）", "成交量"))
 
-    # K線
-    fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
-                                  name="K線", increasing_line_color="#ef5350", decreasing_line_color="#26a69a"), row=1, col=1)
+    # K線（含所有指標數值 custom hover）
+    hover_data = np.column_stack([
+        fi_ema.reindex(df.index).fillna(0).values,
+        rsi_series.reindex(df.index).fillna(0).values,
+        macd_line.reindex(df.index).fillna(0).values,
+        signal_line.reindex(df.index).fillna(0).values,
+        df["Volume"].values,
+    ])
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+        name="K線", increasing_line_color="#ef5350", decreasing_line_color="#26a69a",
+        customdata=hover_data,
+        hovertemplate=(
+            "<b>%{x|%Y-%m-%d}</b><br>"
+            "開 %{open:.2f}　高 %{high:.2f}　低 %{low:.2f}　收 %{close:.2f}<br>"
+            "──────────────────<br>"
+            "FI EMA：%{customdata[0]:.2f}<br>"
+            "RSI：%{customdata[1]:.1f}<br>"
+            "MACD：%{customdata[2]:.3f}　Signal：%{customdata[3]:.3f}<br>"
+            "成交量：%{customdata[4]:,.0f}"
+            "<extra></extra>"
+        )
+    ), row=1, col=1)
     fig.add_hline(y=stop_loss, line_dash="dash", line_color="orange", line_width=1.5,
                   annotation_text=f"停損 {stop_loss:.2f}", annotation_position="right", row=1, col=1)
 
