@@ -189,9 +189,15 @@ with st.sidebar:
     st.header("⚙️ 參數設定")
     capital = st.number_input("總本金（元）", min_value=100_000, max_value=100_000_000, value=1_000_000, step=100_000, format="%d")
 
-    style = st.radio("交易風格", ["保守", "平衡", "積極"], index=1, horizontal=True,
-                     help="保守：小倉、寬停損　平衡：標準設定　積極：大倉、緊停損")
-    style_defaults = {"保守": (1.0, 3.0), "平衡": (2.0, 2.5), "積極": (4.0, 1.5)}
+    style = st.radio("交易風格", ["超保守", "保守", "穩健", "積極", "激進"], index=2,
+                     help="超保守 0.5%｜保守 1%｜穩健 2%｜積極 5%｜激進 10%")
+    style_defaults = {
+        "超保守": (0.5, 3.5),
+        "保守":   (1.0, 3.0),
+        "穩健":   (2.0, 2.5),
+        "積極":   (5.0, 2.0),
+        "激進":   (10.0, 1.5),
+    }
     default_risk, default_atr = style_defaults[style]
 
     risk_pct = st.slider("單筆最大虧損（佔本金 %）", 0.5, 20.0, default_risk, 0.5) / 100
