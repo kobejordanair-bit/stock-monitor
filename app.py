@@ -653,7 +653,7 @@ def render_analysis(symbol: str, market: str, df, company_name: str):
 #  主畫面 Tab
 # ─────────────────────────────────────────────
 
-tab_search, tab_watchlist, tab_alerts = st.tabs(["🔍 查詢股票", "⭐ 自選清單掃描", "🔔 價格警示"])
+tab_search, tab_watchlist, tab_alerts, tab_market = st.tabs(["🔍 查詢股票", "⭐ 自選清單掃描", "🔔 價格警示", "🔭 市場掃描"])
 
 with tab_search:
     col_input, col_btn = st.columns([3, 1])
@@ -751,3 +751,139 @@ with tab_alerts:
                 if col_del.button("🗑️", key=f"del_alert_{row['id']}"):
                     db_delete("alerts", row["id"])
                     st.rerun()
+
+# ─────────────────────────────────────────────
+#  市場掃描
+# ─────────────────────────────────────────────
+
+def _score_tw_stock(code: str) -> dict | None:
+    try:
+        import twstock
+        symbol = f"{code}.TW"
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period="3mo", auto_adjust=True)
+        if df.empty or len(df) < 40:
+            return None
+        df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+        if len(df) < 40:
+            return None
+        df.index = pd.to_datetime(df.index.date)
+
+        last_close = float(df["Close"].iloc[-1])
+        if last_close < 5:  # 過濾低價股
+            return None
+
+        score = 0
+        signals = []
+
+        # FI EMA 近期由負轉正（+2）
+        fi = (df["Close"].diff() * df["Volume"]).ewm(span=13, adjust=False).mean()
+        if fi.iloc[-1] > 0 and fi.iloc[-6:-1].min() <= 0:
+            score += 2
+            signals.append("FI轉正")
+
+        # 量能放大 > 1.5x 20日均量（+1）
+        vol_avg20 = df["Volume"].iloc[-20:].mean()
+        vol_avg3  = df["Volume"].iloc[-3:].mean()
+        vol_ratio = vol_avg3 / vol_avg20 if vol_avg20 > 0 else 0
+        if vol_ratio >= 1.5:
+            score += 1
+            signals.append(f"量{vol_ratio:.1f}x")
+
+        # 布林通道收窄：目前寬度 < 過去20日均寬 × 0.8（+1）
+        ma20 = df["Close"].rolling(20).mean()
+        std20 = df["Close"].rolling(20).std()
+        bb_w = (std20 / ma20).dropna()
+        if len(bb_w) >= 20 and bb_w.iloc[-1] < bb_w.iloc[-20:].mean() * 0.8:
+            score += 1
+            signals.append("BB收窄")
+
+        # 股價在 MA20 上方 0–5%（+1）
+        last_ma20 = float(ma20.iloc[-1])
+        pct_above = (last_close - last_ma20) / last_ma20
+        if 0 <= pct_above <= 0.05:
+            score += 1
+            signals.append("貼近MA20")
+
+        # RSI 在 35–55 蓄力區（+1）
+        delta = df["Close"].diff()
+        gain = delta.clip(lower=0).ewm(span=14, adjust=False).mean()
+        loss = (-delta.clip(upper=0)).ewm(span=14, adjust=False).mean()
+        rsi_s = 100 - 100 / (1 + gain / loss.where(loss != 0, other=np.nan))
+        last_rsi = float(rsi_s.iloc[-1])
+        if 35 <= last_rsi <= 55:
+            score += 1
+            signals.append(f"RSI {last_rsi:.0f}")
+
+        if score < 2:
+            return None
+
+        name = twstock.codes[code].name if code in twstock.codes else code
+        return {"symbol": symbol, "name": name, "score": score,
+                "signals": " | ".join(signals), "close": last_close,
+                "rsi": last_rsi, "vol_ratio": vol_ratio}
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=21600)
+def scan_market_tw():
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import twstock
+    codes = [c for c, info in twstock.codes.items()
+             if getattr(info, "market", "") in ("上市", "上櫃") and c.isdigit() and len(c) == 4]
+    results = []
+    with ThreadPoolExecutor(max_workers=15) as executor:
+        futures = {executor.submit(_score_tw_stock, c): c for c in codes}
+        for f in as_completed(futures):
+            r = f.result()
+            if r:
+                results.append(r)
+    return sorted(results, key=lambda x: x["score"], reverse=True)
+
+
+with tab_market:
+    st.subheader("🔭 台股全市場早期潛力掃描")
+    st.caption("掃描全體上市／上櫃股票，篩選同時出現多項早期蓄力訊號的候選股")
+
+    with st.expander("📖 訊號說明"):
+        st.markdown("""
+| 訊號 | 分數 | 意義 |
+|------|------|------|
+| **FI EMA 轉正** | +2 | 過去5天內 Force Index EMA 由負轉正，大資金開始進場 |
+| **量能放大** | +1 | 近3日均量 > 20日均量 1.5倍，有異常買盤 |
+| **BB 收窄** | +1 | 布林通道收窄，大波動即將發生 |
+| **貼近 MA20** | +1 | 股價在 MA20 上方 0–5%，站穩支撐 |
+| **RSI 蓄力區** | +1 | RSI 在 35–55，未超買也未超賣，健康蓄力 |
+
+**最高 6 分。建議只關注 3 分以上的候選股，再自行進入個股頁面確認。**
+        """)
+
+    min_score = st.slider("最低分數門檻", 2, 5, 3)
+    st.info("⏱️ 首次掃描約需 2–3 分鐘（掃描約 1,500 支股票），結果快取 6 小時。")
+
+    if st.button("🔍 開始掃描", type="primary", key="market_scan_btn"):
+        with st.spinner("掃描中，請稍候…"):
+            all_results = scan_market_tw()
+        filtered = [r for r in all_results if r["score"] >= min_score]
+        st.session_state["market_scan_results"] = filtered
+        st.session_state["market_scan_total"] = len(all_results)
+
+    if "market_scan_results" in st.session_state:
+        filtered = st.session_state["market_scan_results"]
+        total   = st.session_state.get("market_scan_total", "?")
+        if not filtered:
+            st.warning(f"沒有符合 {min_score} 分以上的股票（共掃描 {total} 支）")
+        else:
+            st.success(f"找到 **{len(filtered)}** 支候選股（共掃描 {total} 支）")
+            df_out = pd.DataFrame([{
+                "代號": r["symbol"].replace(".TW", ""),
+                "名稱": r["name"],
+                "分數": r["score"],
+                "訊號": r["signals"],
+                "現價": f"{r['close']:.1f}",
+                "RSI": f"{r['rsi']:.0f}",
+                "量能倍數": f"{r['vol_ratio']:.1f}x",
+            } for r in filtered])
+            st.dataframe(df_out, use_container_width=True, hide_index=True)
+            st.caption("點「查詢股票」輸入代號可進一步分析個股")
